@@ -1,0 +1,3 @@
+# vLLM 压测工具链依赖（与项目主 requirements.txt 兼容）
+httpx>=0.27.0
+python-dotenv>=1.0.1

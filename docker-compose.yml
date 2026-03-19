@@ -1,0 +1,207 @@
+version: "3.9"
+
+services:
+  zookeeper:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bitnami/zookeeper:3.9.2
+    container_name: zookeeper
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports:
+      - "2181:2181"
+    networks:
+      - rag-net
+
+  kafka:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bitnami/kafka:3.7
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+    networks:
+      - rag-net
+
+  namenode:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: hdfs-namenode
+    environment:
+      CLUSTER_NAME: rag-hdfs
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - hdfs_namenode:/hadoop/dfs/name
+    networks:
+      - rag-net
+
+  datanode:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: hdfs-datanode
+    depends_on:
+      - namenode
+    environment:
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      SERVICE_PRECONDITION: namenode:9870
+      # 当使用远端 Ray Worker 时，DataNode 需公布宿主机 IP 以便远端连接块传输端口 9866
+      HDFS_CONF_dfs_datanode_hostname: ${HDFS_DATANODE_ANNOUNCE_HOST:-}
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "9864:9864"
+      - "9866:9866"
+    volumes:
+      - hdfs_datanode:/hadoop/dfs/data
+    networks:
+      - rag-net
+
+  spark-master:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bitnami/spark:3.5.3
+    container_name: spark-master
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    networks:
+      - rag-net
+
+  spark-worker:
+    image: swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/bitnami/spark:3.5.3
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 4G
+      SPARK_WORKER_CORES: "2"
+    ports:
+      - "8081:8081"
+    networks:
+      - rag-net
+
+  ray-head:
+    image: ${RAY_IMAGE_NAME:-llm-pipeline/ray:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile.ray
+    container_name: ray-head
+    entrypoint:
+      - /bin/bash
+      - /workspace/scripts/start_ray_node.sh
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${RAY_HEAD_VISIBLE_GPUS:-all}
+      RAY_NODE_ROLE: head
+      RAY_NODE_IP: ${RAY_HEAD_NODE_IP:-}
+      RAY_HEAD_PORT: ${RAY_HEAD_PORT:-6379}
+      RAY_HEAD_CLIENT_PORT: ${RAY_HEAD_CLIENT_PORT:-10001}
+      RAY_DASHBOARD_PORT: ${RAY_DASHBOARD_PORT:-8265}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+      PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}
+    runtime: nvidia
+    network_mode: host
+    ipc: host
+    volumes:
+      - .:/workspace
+      - huggingface_cache:/root/.cache/huggingface
+    working_dir: /workspace
+
+  ray-worker:
+    image: ${RAY_IMAGE_NAME:-llm-pipeline/ray:latest}
+    container_name: ray-worker
+    depends_on:
+      - ray-head
+    entrypoint:
+      - /bin/bash
+      - /workspace/scripts/start_ray_node.sh
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${RAY_WORKER_VISIBLE_GPUS:-none}
+      RAY_NODE_ROLE: worker
+      RAY_HEAD_PORT: ${RAY_HEAD_PORT:-6379}
+      RAY_CLUSTER_JOIN_ADDRESS: ${RAY_CLUSTER_JOIN_ADDRESS:-host.docker.internal:6379}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+      PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}
+    runtime: nvidia
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/workspace
+      - huggingface_cache:/root/.cache/huggingface
+    working_dir: /workspace
+    networks:
+      - rag-net
+
+  ray-worker-2:
+    image: ${RAY_IMAGE_NAME:-llm-pipeline/ray:latest}
+    container_name: ray-worker-2
+    depends_on:
+      - ray-head
+    entrypoint:
+      - /bin/bash
+      - /workspace/scripts/start_ray_node.sh
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${RAY_WORKER2_VISIBLE_GPUS:-none}
+      RAY_NODE_ROLE: worker
+      RAY_HEAD_PORT: ${RAY_HEAD_PORT:-6379}
+      RAY_CLUSTER_JOIN_ADDRESS: ${RAY_CLUSTER_JOIN_ADDRESS:-host.docker.internal:6379}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+      PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}
+    runtime: nvidia
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/workspace
+      - huggingface_cache:/root/.cache/huggingface
+    working_dir: /workspace
+    networks:
+      - rag-net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: app
+    command: sleep infinity
+    depends_on:
+      - kafka
+      - namenode
+      - spark-master
+      - ray-head
+    env_file:
+      - .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      HDFS_HOST: namenode
+      RAY_ADDRESS: ray://host.docker.internal:${RAY_HEAD_CLIENT_PORT:-10001}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+      PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    networks:
+      - rag-net
+
+volumes:
+  hdfs_namenode:
+  hdfs_datanode:
+  huggingface_cache:
+
+networks:
+  rag-net:
+    driver: bridge

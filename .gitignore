@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+logs/
+*.log
+*.tar.gz
+.idea/
+.vscode/
+.runtime/
+.cursor/
+.DS_Store
+models/
+labeled_output.csv

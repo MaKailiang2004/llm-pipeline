@@ -1,0 +1,55 @@
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:latest
+
+WORKDIR /workspace
+
+# PySpark needs a JRE.
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list ]; then \
+      sed -i \
+        -e 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' \
+        -e 's|http://security.ubuntu.com/ubuntu/|http://mirrors.tuna.tsinghua.edu.cn/ubuntu/|g' \
+        -e 's|http://deb.debian.org/debian|http://mirrors.tuna.tsinghua.edu.cn/debian|g' \
+        -e 's|http://security.debian.org/debian-security|http://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
+        /etc/apt/sources.list || true; \
+    fi; \
+    apt-get update && \
+    apt-get install -y --no-install-recommends openjdk-17-jre-headless curl ca-certificates tar && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Hadoop native libs for Ray/PyArrow HDFS I/O (libhdfs.so).
+RUN set -eux; \
+    HADOOP_VERSION=3.3.6; \
+    HADOOP_TGZ="hadoop-${HADOOP_VERSION}.tar.gz"; \
+    for url in \
+      "https://mirrors.tuna.tsinghua.edu.cn/apache/hadoop/common/hadoop-${HADOOP_VERSION}/${HADOOP_TGZ}" \
+      "https://mirrors.aliyun.com/apache/hadoop/common/hadoop-${HADOOP_VERSION}/${HADOOP_TGZ}" \
+      "https://archive.apache.org/dist/hadoop/common/hadoop-${HADOOP_VERSION}/${HADOOP_TGZ}"; \
+    do \
+      if curl -fL --retry 3 --connect-timeout 10 "$url" -o "/tmp/${HADOOP_TGZ}"; then \
+        break; \
+      fi; \
+    done; \
+    test -s "/tmp/${HADOOP_TGZ}"; \
+    tar -xzf "/tmp/${HADOOP_TGZ}" -C /opt; \
+    ln -s "/opt/hadoop-${HADOOP_VERSION}" /opt/hadoop; \
+    rm -f "/tmp/${HADOOP_TGZ}"
+
+# More robust pip behavior for large dependency sets.
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_DEFAULT_TIMEOUT=100
+ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+# Install Ray runtime (vLLM/torch are already inside base image).
+COPY requirements-ray.txt /tmp/requirements-ray.txt
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install --no-cache-dir --prefer-binary -r /tmp/requirements-ray.txt
+
+# Make project importable inside Ray workers (code is mounted at runtime).
+ENV PYTHONPATH=/workspace/src
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV HADOOP_HOME=/opt/hadoop
+ENV ARROW_LIBHDFS_DIR=/opt/hadoop/lib/native
+ENV LD_LIBRARY_PATH=/opt/hadoop/lib/native:${LD_LIBRARY_PATH}
+ENV CLASSPATH=/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/hdfs/lib/*
+ENV HF_ENDPOINT=https://hf-mirror.com

@@ -1,0 +1,8 @@
+confluent-kafka>=2.4.0
+httpx>=0.27.0
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+pyspark==3.5.3
+ray[data,client]==2.54.0
+torch>=2.2.0
+transformers>=4.44.0

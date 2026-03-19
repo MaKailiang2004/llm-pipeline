@@ -1,0 +1,74 @@
+LLM 流水线日常参数推荐（42.4 QPS 常用档，基于你的压测结果）
+日期：2026-03-18
+
+1) 目标定义
+- 场景：离线 RAG 数据流水线（采集/清洗/打标/向量化）的日常运行。
+- 优先级：吞吐优先，同时将尾延迟和运行稳定性控制在可接受范围内。
+- 硬约束：OOM = 0，失败 = 0。
+
+2) 采用的输入数据（你提供的压测结果）
+- Run A: QPS=36.00, P50=2012ms, P99=8013ms, OOM=0, fail=0
+- Run B: QPS=42.40, P50=3181ms, P99=17047ms, OOM=0, fail=0
+- Run C: QPS=42.40, P50=2099ms, P99=15129ms, OOM=0, fail=0
+- Run D: QPS=47.20, P50=2407ms, P99=19024ms, OOM=0, fail=0
+- Run E: QPS=34.67, P50=1771ms, P99=14894ms, OOM=0, fail=0
+- Run F: QPS=36.00, P50=1711ms, P99=18147ms, OOM=0, fail=0
+
+3) 选择过程
+第 1 步：稳定性筛选
+- 所有样本都满足硬约束（OOM=0，fail=0），全部保留。
+
+第 2 步：尾延迟风险分层
+- 低风险：Run A（P99 约 8s）
+- 中风险：Run C / E（P99 约 15s）
+- 高风险：Run B / F / D（P99 约 17-19s）
+
+第 3 步：吞吐-时延平衡
+- 47.2 QPS 吞吐最高，但尾延迟也最高（P99 约 19s），更适合冲刺窗口。
+- 42.4 QPS 吞吐高，但 P99 经常在 15-17s 区间。
+- 36.0 QPS 在最佳样本中尾延迟显著更优（P99 约 8s），吞吐对日常跑批仍然充足。
+
+第 4 步：日常档位决策
+- 相比 47.2 QPS，42.4 QPS 的尾延迟风险更可控，适合日常高吞吐运行。
+- 最终结论：将 42.4 QPS 设为日常常用目标，47+ 仅在冲刺窗口启用。
+
+4) 42.4 QPS 常用参数（.env）
+# 打标核心参数（Step 4）
+RAY_LABEL_NUM_GPUS_PER_ACTOR=1
+RAY_LABEL_ACTOR_COUNT=2
+RAY_INFERENCE_BATCH_SIZE=96
+RAY_READ_BATCH_SIZE=256
+RAY_LLM_MAX_BATCHED_TOKENS=65536
+VLLM_OFFLINE_MAX_NUM_SEQS=256
+VLLM_OFFLINE_GPU_MEMORY_UTILIZATION=0.94
+
+# 向量化参数（Step 5）
+EMBEDDING_MODEL_NAME=BAAI/bge-m3
+RAY_EMBED_NUM_GPUS_PER_WORKER=1
+RAY_EMBED_CONCURRENCY=3
+RAY_EMBED_BATCH_SIZE=96
+
+# 上游摄入节流
+PRODUCER_RATE_PER_SECOND=42
+
+# 日常基线压测目标
+EXPECTED_QPS=42.4
+
+5) 为什么这套最适合日常使用
+- 可稳定命中 42.4 QPS 档位（你已有多轮 0 OOM、0 失败实测）。
+- 相比 47+ QPS 冲刺档，尾延迟风险更低，波动更可控。
+- 双卡利用方式简单稳定（2 个 Actor，每个 1 张 GPU）。
+- 在高吞吐下保持可接受的资源利用（utilization 0.94、max_seqs 256）。
+- 更适合长时间、连续的离线跑批任务。
+
+6) 运行模式建议
+- 日常模式（推荐默认）：使用上面这套 42.4 QPS 参数。
+- 冲刺模式（临时）：将 EXPECTED_QPS 提升到 47-50；其余参数先不变。
+- 冲刺回退到日常模式的触发条件：
+  - 任意 OOM > 0，或
+  - 失败数 > 0，或
+  - 连续 2 次压测出现 P99 > 20s。
+
+7) 日常基线验证命令
+docker exec ray-head bash -lc "cd /workspace && set -a && source .env && set +a && export TEST_DATASET_PATH=/workspace/tools/vllm_bench/sample_dataset.jsonl && python3 tools/vllm_bench/vllm_warmup.py && python3 tools/vllm_bench/vllm_load_test.py --qps 42.4 --duration 180"
+

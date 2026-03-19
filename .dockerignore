@@ -1,0 +1,15 @@
+.git
+.cursor
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+logs
+data
+models
+models/**
+node_modules
+.DS_Store

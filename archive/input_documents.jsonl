@@ -1,0 +1,4 @@
+{"doc_id":"doc-001","title":"Quarterly Revenue Forecast","content":"Projected Q3 revenue is expected to grow by 12 percent with APAC as the key contributor.","source":"internal_report","timestamp":"2026-03-01T09:00:00Z"}
+{"doc_id":"doc-002","title":"Clinical Trial Protocol Update","content":"The revised protocol introduces a second cohort and updates inclusion criteria for adult participants.","source":"medical_bulletin","timestamp":"2026-03-01T09:30:00Z"}
+{"doc_id":"doc-003","title":"Data Privacy Compliance Memo","content":"The legal team recommends revising retention policies to align with cross-border transfer regulations.","source":"legal_memo","timestamp":"2026-03-01T10:00:00Z"}
+{"doc_id":"doc-004","title":"Distributed Training Best Practices","content":"Mixed precision and gradient checkpointing can significantly reduce GPU memory pressure in large-scale model training.","source":"tech_blog","timestamp":"2026-03-01T10:30:00Z"}
